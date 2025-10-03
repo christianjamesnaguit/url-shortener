@@ -1,56 +1,77 @@
-require("dotenv").config()
-const express = require("express")
-const { MongoClient } = require("mongodb")
-const dns = require("dns")
-const urlParser = require("url")
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const dns = require('dns');
+const urlParser = require('url');
 
-const app = express()
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+const app = express();
 
-const mongoUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/shortener"
-const client = new MongoClient(mongoUrl)
-let urls
+// Basic Configuration
+const port = process.env.PORT || 3000;
 
-async function initDb() {
-  await client.connect()
-  const db = client.db("shortener")
-  urls = db.collection("urls")
+app.use(cors());
+app.use(express.urlencoded({ extended: false }));
+
+app.use('/public', express.static(`${process.cwd()}/public`));
+
+app.get('/', function (req, res) {
+  res.sendFile(process.cwd() + '/views/index.html');
+});
+
+// Test endpoint
+app.get('/api/hello', function (req, res) {
+  res.json({ greeting: 'hello API' });
+});
+
+// In-memory database
+let urlDatabase = [];
+let idCounter = 1;
+
+// Helper to validate URL format
+function isValidHttpUrl(string) {
+  try {
+    const url = new URL(string);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch (_) {
+    return false;
+  }
 }
-initDb()
 
-app.get("/", (req, res) => {
-  res.sendFile(__dirname + "/views/index.html")
-})
+// POST /api/shorturl
+app.post('/api/shorturl', (req, res) => {
+  const originalUrl = req.body.url;
 
-app.post("/api/shorturl", async (req, res) => {
-  let origUrl = req.body.url
-  let parsedUrl = urlParser.parse(origUrl)
-
-  if (!parsedUrl.hostname || !/^https?:/.test(parsedUrl.protocol)) {
-    return res.json({ error: "invalid url" })
+  // Validate format first
+  if (!isValidHttpUrl(originalUrl)) {
+    return res.json({ error: 'invalid url' });
   }
 
-  dns.lookup(parsedUrl.hostname, async (err) => {
-    if (err) return res.json({ error: "invalid url" })
+  const hostname = urlParser.parse(originalUrl).hostname;
 
-    let count = await urls.countDocuments()
-    let doc = { original_url: origUrl, short_url: count + 1 }
-    await urls.insertOne(doc)
+  dns.lookup(hostname, (err) => {
+    if (err) {
+      return res.json({ error: 'invalid url' });
+    }
 
-    res.json({ original_url: origUrl, short_url: count + 1 })
-  })
-})
+    const shortUrl = idCounter++;
+    urlDatabase.push({ original_url: originalUrl, short_url: shortUrl });
 
-app.get("/api/shorturl/:id", async (req, res) => {
-  let id = parseInt(req.params.id)
-  let doc = await urls.findOne({ short_url: id })
+    res.json({ original_url: originalUrl, short_url: shortUrl });
+  });
+});
 
-  if (!doc) return res.json({ error: "No short URL found" })
-  res.redirect(doc.original_url)
-})
+// GET /api/shorturl/:short_url
+app.get('/api/shorturl/:short_url', (req, res) => {
+  const shortUrl = parseInt(req.params.short_url);
+  const entry = urlDatabase.find(item => item.short_url === shortUrl);
 
-const port = process.env.PORT || 3000
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`)
-})
+  if (entry) {
+    res.redirect(entry.original_url);
+  } else {
+    res.status(404).json({ error: 'No short URL found for given input' });
+  }
+});
+
+app.listen(port, function () {
+  console.log(`Listening on port ${port}`);
+});
